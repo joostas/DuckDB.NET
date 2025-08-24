@@ -47,6 +47,12 @@ internal sealed class PreparedStatement : IDisposable
         }
     }
 
+    public static DuckDBResult ExecutePreparedStatement(DuckDBNativeConnection connection, DuckDBPreparedStatement statement, DuckDBParameterCollection parameters, bool useStreamingMode)
+    {
+        using var preparedStatement = new PreparedStatement(statement);
+        return preparedStatement.Execute(parameters, useStreamingMode);
+    }
+
     private DuckDBResult Execute(DuckDBParameterCollection parameterCollection, bool useStreamingMode)
     {
         BindParameters(statement, parameterCollection);

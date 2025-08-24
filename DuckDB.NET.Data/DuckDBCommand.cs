@@ -1,5 +1,6 @@
 ﻿using DuckDB.NET.Native;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Data.Common;
@@ -116,7 +117,83 @@ public class DuckDBCommand : DbCommand
     {
         EnsureConnectionOpen();
 
-        var results = PreparedStatement.PreparedStatement.PrepareMultiple(connection!.NativeConnection, CommandText, parameters, UseStreamingMode);
+        IEnumerable<DuckDBResult> results;
+
+        if (parameters.Count > 0 || UseStreamingMode)
+        {
+            results = PreparedStatement.PreparedStatement.PrepareMultiple(connection!.NativeConnection, CommandText, parameters, UseStreamingMode);
+        }
+        else
+        {
+            using var unmanagedQuery = CommandText.ToUnmanagedString();
+
+            var conn = connection!.NativeConnection;
+            var statementCount = NativeMethods.ExtractStatements.DuckDBExtractStatements(conn, unmanagedQuery, out var extractedStatements);
+
+            using (extractedStatements)
+            {
+                if (statementCount <= 0)
+                {
+                    var error = NativeMethods.ExtractStatements.DuckDBExtractStatementsError(extractedStatements);
+                    throw new DuckDBException(error.ToManagedString(false));
+                }
+
+                if (statementCount == 1)
+                {
+                    var state = NativeMethods.Query.DuckDBQuery(conn, unmanagedQuery, out var res);
+                    if (state == DuckDBState.Error)
+                    {
+                        HandleError(ref res);
+                    }
+
+                    results = [res];
+                }
+                else
+                {
+                    var resultsArray = new DuckDBResult[statementCount];
+                    for (int index = 0; index < statementCount; index++)
+                    {
+                        var status = NativeMethods.ExtractStatements.DuckDBPrepareExtractedStatement(conn, extractedStatements, index, out var statement);
+
+                        if (status.IsSuccess())
+                        {
+                            resultsArray[index] = PreparedStatement.PreparedStatement.ExecutePreparedStatement(conn, statement, Parameters, UseStreamingMode);
+                        }
+                        else
+                        {
+                            var errorMessage = NativeMethods.PreparedStatements.DuckDBPrepareError(statement).ToManagedString(false);
+
+                            throw new DuckDBException(string.IsNullOrEmpty(errorMessage) ? "DuckDBQuery failed" : errorMessage);
+                        }
+                    }
+                    results = resultsArray;
+                }
+            }
+
+            void HandleError(ref DuckDBResult queryResult)
+            {
+                var errorMessage = NativeMethods.Query.DuckDBResultError(ref queryResult).ToManagedString(false);
+                var errorType = NativeMethods.Query.DuckDBResultErrorType(ref queryResult);
+                queryResult.Close();
+
+                if (string.IsNullOrEmpty(errorMessage))
+                {
+                    errorMessage = "DuckDB execution failed";
+                }
+
+                if (errorType == DuckDBErrorType.Interrupt)
+                {
+                    throw new OperationCanceledException();
+                }
+
+                if (errorType == DuckDBErrorType.InvalidInput)
+                {
+                    throw new InvalidOperationException();
+                }
+
+                throw new DuckDBException(errorMessage, errorType);
+            }
+        }
 
         var reader = new DuckDBDataReader(this, results, behavior);
 
