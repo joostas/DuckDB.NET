@@ -4,6 +4,7 @@ using FluentAssertions;
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.IO;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -432,5 +433,33 @@ public class DuckDBDataReaderTests(DuckDBDatabaseFixture db) : DuckDBTestBase(db
         var reader = Command.ExecuteReader();
         reader.Read();
         var value = (BigInteger)reader.GetValue(0);
+    }
+
+    [Fact]
+    public void LogSqlStatements()
+    {
+        if (File.Exists("log.txt"))
+        {
+            File.Delete("log.txt");
+        }
+
+        Command.CommandText = "SET log_query_path = log.txt";
+        _ = Command.ExecuteNonQuery();
+        Command.CommandText = "SELECT 1 FROM B";
+        try
+        {
+            Command.ExecuteReader();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex.Message);
+            // Ignore 
+        }
+        
+        File.Exists("log.txt");
+        Command.CommandText = "RESET log_query_path";
+        Command.ExecuteReader();
+        var logs = File.ReadAllText("log.txt");
+        logs.Contains("SELECT 1 FROM").Should().BeTrue();
     }
 }
